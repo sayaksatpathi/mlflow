@@ -1,3 +1,4 @@
+import builtins
 import os
 from unittest import mock
 
@@ -90,3 +91,20 @@ def test_config_development_config_to_dict():
         "llm_parameters": {"temperature": 0.01, "max_tokens": 500},
         "llm_prompt_template_variables": ["chat_history", "context", "question"],
     }
+
+
+def test_config_reads_utf8_regardless_of_default_encoding(tmp_path, monkeypatch):
+    prompt = "You’re a helpful assistant — reply in 日本語"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f'llm_prompt_template: "{prompt}"\n', encoding="utf-8")
+
+    # Make text-mode `open` in mlflow.models.model_config default to cp1252, as it does on
+    # Windows with a legacy code page, so the test does not depend on the runner's locale.
+    def open_with_cp1252_default(file, mode="r", *args, encoding=None, **kwargs):
+        if "b" not in mode and encoding is None:
+            encoding = "cp1252"
+        return builtins.open(file, mode, *args, encoding=encoding, **kwargs)
+
+    monkeypatch.setattr("mlflow.models.model_config.open", open_with_cp1252_default, raising=False)
+    config = ModelConfig(development_config=str(config_path))
+    assert config.get("llm_prompt_template") == prompt

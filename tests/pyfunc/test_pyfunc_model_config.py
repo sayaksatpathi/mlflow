@@ -1,3 +1,5 @@
+import builtins
+import json
 import os
 
 import pytest
@@ -152,3 +154,29 @@ def test_pyfunc_loader_without_model_config(model_path):
     pyfunc_model = mlflow.pyfunc.load_model(model_path, model_config=inference_override)
 
     assert not pyfunc_model.model_config
+
+
+@pytest.mark.parametrize("file_name", ["config.yaml", "config.json"])
+def test_log_model_reads_model_config_file_as_utf8(tmp_path, monkeypatch, file_name):
+    model_config = {"llm_prompt_template": "You’re a helpful assistant — reply in 日本語"}
+    config_path = tmp_path / file_name
+    # JSON is also valid YAML, so the same content works for both extensions.
+    config_path.write_text(json.dumps(model_config, ensure_ascii=False), encoding="utf-8")
+
+    # Make text-mode `open` default to cp1252, as it does on Windows with a legacy code page,
+    # so the test does not depend on the runner's locale.
+    def open_with_cp1252_default(file, mode="r", *args, encoding=None, **kwargs):
+        if "b" not in mode and encoding is None:
+            encoding = "cp1252"
+        return builtins.open(file, mode, *args, encoding=encoding, **kwargs)
+
+    for module in ["mlflow.models.model", "mlflow.utils.model_utils"]:
+        monkeypatch.setattr(f"{module}.open", open_with_cp1252_default, raising=False)
+
+    with mlflow.start_run() as run:
+        model_info = mlflow.pyfunc.log_model(
+            name="model", python_model=InferenceContextModel(), model_config=str(config_path)
+        )
+
+    assert mlflow.get_run(run.info.run_id).data.params == model_config
+    assert mlflow.pyfunc.load_model(model_info.model_uri).model_config == model_config
